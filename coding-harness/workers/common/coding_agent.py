@@ -28,8 +28,11 @@ UNATTENDED worker:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+import shutil
+import subprocess
 from typing import Any
 
 from common.tool_policy import DEFAULT_ALLOWED_TOOLS, DEFAULT_DISALLOWED_TOOLS
@@ -226,6 +229,57 @@ def _worktree_guard(worktree_abs: str, write_roots: list[str] | None = None) -> 
     return sdk.HookMatcher(matcher="Write|Edit|NotebookEdit", hooks=[guard])
 
 
+def _deny_hol_guard(reason: str) -> dict[str, Any]:
+    return {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": f"HOL Guard: {reason}",
+        }
+    }
+
+
+async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
+    """Gate Bash with the installed HOL Guard CLI when the integration is enabled."""
+    del tool_use_id, context
+    tool_input = input_data.get("tool_input") or {}
+    command = tool_input.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return _deny_hol_guard("missing Bash command")
+
+    executable = shutil.which("hol-guard")
+    if not executable:
+        return _deny_hol_guard("hol-guard is not installed")
+
+    try:
+        completed = await asyncio.to_thread(
+            subprocess.run,
+            [executable, "command", "test", command, "--json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return _deny_hol_guard("evaluation failed")
+        verdict = json.loads(completed.stdout)
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError):
+        return _deny_hol_guard("evaluation failed")
+
+    if not isinstance(verdict, dict):
+        return _deny_hol_guard("malformed verdict")
+    classification = verdict.get("classification")
+    if not isinstance(classification, dict):
+        return _deny_hol_guard("malformed verdict")
+    if classification.get("explicitly_benign") is True and verdict.get("minimum_action") == "allow":
+        return {}
+    return _deny_hol_guard("command requires review or is not explicitly benign")
+
+
+def _hol_guard() -> sdk.HookMatcher:
+    return sdk.HookMatcher(matcher="Bash", hooks=[_hol_guard_pretool])
+
+
 def _summarize_tool(block: sdk.ToolUseBlock) -> str:
     """Human-readable one-liner for a single tool call, surfacing the salient arg.
 
@@ -369,6 +423,7 @@ async def run_coding_agent(
     backend: str | None = None,
     write_roots: list[str] | None = None,
     context_paths: list[str] | None = None,
+    hol_guard_enabled: bool = False,
 ) -> dict[str, Any]:
     """Run one locked-down autonomous coding session to completion (async).
 
@@ -411,6 +466,10 @@ async def run_coding_agent(
     directory to the prompt so the agent skips the reflexive first-turn `ls`/`Glob`
     — saving a model round-trip and its tokens. Skipped on resume (the session
     already has the tree).
+
+    ``hol_guard_enabled`` adds an opt-in Bash PreToolUse gate backed by the installed
+    ``hol-guard`` CLI. Once enabled, missing Guard, evaluation errors, review/deny
+    verdicts, and anything short of an explicit benign allow fail closed.
     """
     import collections
     # realpath canonicalizes symlinks (on macOS /tmp -> /private/tmp) so the guard
@@ -444,6 +503,13 @@ async def run_coding_agent(
     # Both are blocking subprocess drivers (can run for minutes) — a worker thread,
     # not the shared event loop. Conductor task definitions own runtime limits.
     be = _infer_backend(backend, model)
+    if hol_guard_enabled and be != "claude":
+        return {
+            "ok": False, "status": "unsupported_hol_guard_backend", "result": "",
+            "structured": None, "session_id": None, "num_turns": 0, "tokens": 0,
+            "cost_usd": 0.0, "denials": [], "turn_log": [],
+            "error": "HOL Guard PreToolUse integration currently requires the Claude backend",
+        }
     external_context_paths = _external_context_paths(worktree_abs, context_paths)
     if external_context_paths and be != "claude":
         # Codex/Gemini's current SDK/CLI sandboxes expose no equivalent to
@@ -530,7 +596,12 @@ async def run_coding_agent(
         "tools": tools if tools is not None else DEFAULT_TOOLS,
         "allowed_tools": allowed_tools if allowed_tools is not None else DEFAULT_ALLOWED_TOOLS,
         "disallowed_tools": disallowed_tools if disallowed_tools is not None else DEFAULT_DISALLOWED_TOOLS,
-        "hooks": {"PreToolUse": [_worktree_guard(worktree_abs, write_roots)]},
+        "hooks": {
+            "PreToolUse": [
+                _worktree_guard(worktree_abs, write_roots),
+                *([_hol_guard()] if hol_guard_enabled else []),
+            ]
+        },
         "max_turns": max_turns,
         "stderr": stderr_lines.append,
     }

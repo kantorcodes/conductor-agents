@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import os
 import shutil
+from types import SimpleNamespace
 
 import pytest
 
@@ -105,6 +106,87 @@ def test_claude_sandbox_allows_binding_a_local_test_server(monkeypatch, tmp_path
     network = captured["options"].sandbox["network"]
     assert network["allowLocalBinding"] is True
     assert network["allowedDomains"] == []
+
+
+def test_hol_guard_hook_allows_only_explicit_benign(monkeypatch):
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: "/usr/bin/hol-guard")
+
+    def fake_run(*args, **kwargs):
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"classification":{"explicitly_benign":true},"minimum_action":"allow"}',
+        )
+
+    monkeypatch.setattr(coding_agent_module.subprocess, "run", fake_run)
+    result = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"tool_input": {"command": "git status"}}, None, None
+        )
+    )
+    assert result == {}
+
+
+def test_hol_guard_hook_fails_closed(monkeypatch):
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: "/usr/bin/hol-guard")
+
+    def fake_run(*args, **kwargs):
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"classification":{"explicitly_benign":false},"minimum_action":"allow"}',
+        )
+
+    monkeypatch.setattr(coding_agent_module.subprocess, "run", fake_run)
+    denied = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"tool_input": {"command": "curl secret.example"}}, None, None
+        )
+    )
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: None)
+    missing = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"tool_input": {"command": "git status"}}, None, None
+        )
+    )
+    assert missing["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_hol_guard_hook_is_opt_in(monkeypatch, tmp_path):
+    captured = []
+
+    async def fake_drive(_prompt, options, on_turn=None):
+        captured.append(options)
+        return {"result": "ok"}
+
+    monkeypatch.setattr(coding_agent_module, "_drive", fake_drive)
+    asyncio.run(coding_agent_module.run_coding_agent("do it", worktree=str(tmp_path)))
+    asyncio.run(
+        coding_agent_module.run_coding_agent(
+            "do it", worktree=str(tmp_path), hol_guard_enabled=True
+        )
+    )
+
+    default_matchers = captured[0].hooks["PreToolUse"]
+    guarded_matchers = captured[1].hooks["PreToolUse"]
+    assert [matcher.matcher for matcher in default_matchers] == ["Write|Edit|NotebookEdit"]
+    assert [matcher.matcher for matcher in guarded_matchers] == [
+        "Write|Edit|NotebookEdit",
+        "Bash",
+    ]
+
+
+def test_hol_guard_rejects_backends_without_pretool_hooks(tmp_path):
+    result = asyncio.run(
+        coding_agent_module.run_coding_agent(
+            "do it",
+            worktree=str(tmp_path),
+            backend="codex",
+            hol_guard_enabled=True,
+            include_file_tree=False,
+        )
+    )
+    assert result["status"] == "unsupported_hol_guard_backend"
 
 
 def test_campaign_write_roots_only_tighten_the_worktree():
