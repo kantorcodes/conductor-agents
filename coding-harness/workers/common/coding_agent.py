@@ -254,7 +254,7 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
     try:
         completed = await asyncio.to_thread(
             subprocess.run,
-            [executable, "command", "test", command, "--json"],
+            [executable, "command", "test", "--json", "--", command],
             capture_output=True,
             text=True,
             timeout=10,
