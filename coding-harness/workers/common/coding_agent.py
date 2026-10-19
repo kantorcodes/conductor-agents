@@ -242,7 +242,11 @@ def _deny_hol_guard(reason: str) -> dict[str, Any]:
 async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
     """Gate Bash with the installed HOL Guard CLI when the integration is enabled."""
     del tool_use_id, context
-    tool_input = input_data.get("tool_input") or {}
+    if not isinstance(input_data, dict):
+        return _deny_hol_guard("malformed hook event")
+    tool_input = input_data.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return _deny_hol_guard("malformed Bash tool input")
     command = tool_input.get("command")
     if not isinstance(command, str) or not command.strip():
         return _deny_hol_guard("missing Bash command")
