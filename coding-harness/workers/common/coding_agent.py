@@ -267,7 +267,7 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
         if completed.returncode != 0:
             return _deny_hol_guard("evaluation failed")
         verdict = json.loads(completed.stdout)
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError, ValueError):
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError, UnicodeError):
         return _deny_hol_guard("evaluation failed")
 
     if not isinstance(verdict, dict):
