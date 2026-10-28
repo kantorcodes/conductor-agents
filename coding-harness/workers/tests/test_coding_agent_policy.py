@@ -237,6 +237,8 @@ def test_hol_guard_explicit_stop_overrides_allow(monkeypatch):
         {"continue": 0},
         {"decision": "deny"},
         {"decision": "review"},
+        {"decision": None},
+        {"decision": []},
         {"policy_action": "block"},
         {"reason_code": "native_hook_worker_unavailable"},
         {"hookSpecificOutput": {
