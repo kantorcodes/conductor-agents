@@ -156,7 +156,16 @@ def test_hol_guard_explicit_stop_overrides_allow(monkeypatch):
     import json
 
     monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: "/usr/bin/hol-guard")
-    for signal in ({"continue": False}, {"continue": "false"}, {"continue": 0}, {"decision": "deny"}, {"decision": "review"}):
+    for signal in (
+        {"continue": False},
+        {"continue": "false"},
+        {"continue": 0},
+        {"decision": "deny"},
+        {"decision": "review"},
+        {"policy_action": "block"},
+        {"hookSpecificOutput": {"permissionDecision": "deny"}},
+        {"hookSpecificOutput": "malformed"},
+    ):
         verdict = {
             "minimum_action": "allow",
             "classification": {"explicitly_benign": True},
