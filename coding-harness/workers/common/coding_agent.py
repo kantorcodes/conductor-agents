@@ -275,6 +275,13 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
     classification = verdict.get("classification")
     if not isinstance(classification, dict):
         return _deny_hol_guard("malformed verdict")
+    # Do not let a benign classification override an explicit Guard stop.
+    decision = verdict.get("decision")
+    if verdict.get("continue") is False or (
+        decision is not None
+        and (not isinstance(decision, str) or decision.strip().lower() != "allow")
+    ):
+        return _deny_hol_guard("command explicitly stopped by Guard")
     if classification.get("explicitly_benign") is True and verdict.get("minimum_action") == "allow":
         return {}
     return _deny_hol_guard("command requires review or is not explicitly benign")
