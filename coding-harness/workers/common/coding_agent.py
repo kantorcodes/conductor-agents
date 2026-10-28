@@ -293,7 +293,7 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
 
     decision = verdict.get("decision")
     if ("continue" in verdict and verdict["continue"] is not True) or (
-        decision is not None
+        "decision" in verdict
         and (not isinstance(decision, str) or decision.strip().lower() != "allow")
     ):
         return _deny_hol_guard("command explicitly stopped by Guard")
