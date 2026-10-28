@@ -135,6 +135,47 @@ def test_hol_guard_hook_allows_only_explicit_native_policy(monkeypatch):
     assert result == {}
 
 
+@pytest.mark.parametrize(
+    ("reason_code", "expected_allow"),
+    [
+        ("native_exact_safe_command", True),
+        ("native_exact_introspection_command", True),
+        ("native_exact_risk_requires_review", False),
+        ("native_exact_worker_unavailable", False),
+        ("native_exact_unrecognized", False),
+    ],
+)
+def test_hol_guard_native_reason_must_prove_allow(monkeypatch, reason_code, expected_allow):
+    """An allow-shaped envelope must not override contradictory native-exact evidence."""
+    import json
+
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: "/usr/bin/hol-guard")
+    verdict = {
+        "policy_action": "allow",
+        "reason_code": reason_code,
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+        },
+    }
+    monkeypatch.setattr(
+        coding_agent_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout=json.dumps(verdict)
+        ),
+    )
+    result = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"cwd": os.getcwd(), "tool_input": {"command": "git status"}}, None, None
+        )
+    )
+    if expected_allow:
+        assert result == {}
+    else:
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 def test_hol_guard_hook_fails_closed(monkeypatch):
     import json
 
