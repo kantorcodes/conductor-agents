@@ -251,6 +251,11 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
     if not isinstance(command, str) or not command.strip():
         return _deny_hol_guard("missing Bash command")
 
+    # Claude's hook cwd is the actual directory for Bash, not this worker's cwd.
+    cwd = input_data.get("cwd")
+    if not isinstance(cwd, str) or not os.path.isabs(cwd) or not os.path.isdir(cwd):
+        return _deny_hol_guard("missing or invalid Bash working directory")
+
     executable = shutil.which("hol-guard")
     if not executable:
         return _deny_hol_guard("hol-guard is not installed")
@@ -263,6 +268,7 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
             text=True,
             timeout=10,
             check=False,
+            cwd=cwd,
         )
         if completed.returncode != 0:
             return _deny_hol_guard("evaluation failed")
