@@ -277,7 +277,7 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
         return _deny_hol_guard("malformed verdict")
     # Do not let a benign classification override an explicit Guard stop.
     decision = verdict.get("decision")
-    if verdict.get("continue") is False or (
+    if ("continue" in verdict and verdict["continue"] is not True) or (
         decision is not None
         and (not isinstance(decision, str) or decision.strip().lower() != "allow")
     ):
