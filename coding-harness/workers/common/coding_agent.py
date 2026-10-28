@@ -282,6 +282,15 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
         and (not isinstance(decision, str) or decision.strip().lower() != "allow")
     ):
         return _deny_hol_guard("command explicitly stopped by Guard")
+    # Reject contradictory hook-level decisions before accepting classifier evidence.
+    if "policy_action" in verdict and verdict["policy_action"] != "allow":
+        return _deny_hol_guard("command explicitly stopped by Guard")
+    hook_output = verdict.get("hookSpecificOutput")
+    if hook_output is not None and (
+        not isinstance(hook_output, dict)
+        or hook_output.get("permissionDecision") != "allow"
+    ):
+        return _deny_hol_guard("command explicitly stopped by Guard")
     if classification.get("explicitly_benign") is True and verdict.get("minimum_action") == "allow":
         return {}
     return _deny_hol_guard("command requires review or is not explicitly benign")
