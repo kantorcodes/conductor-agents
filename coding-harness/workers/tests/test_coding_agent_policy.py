@@ -120,7 +120,7 @@ def test_hol_guard_hook_allows_only_explicit_benign(monkeypatch):
     monkeypatch.setattr(coding_agent_module.subprocess, "run", fake_run)
     result = asyncio.run(
         coding_agent_module._hol_guard_pretool(
-            {"tool_input": {"command": "git status"}}, None, None
+            {"cwd": os.getcwd(), "tool_input": {"command": "git status"}}, None, None
         )
     )
     assert result == {}
@@ -138,7 +138,7 @@ def test_hol_guard_hook_fails_closed(monkeypatch):
     monkeypatch.setattr(coding_agent_module.subprocess, "run", fake_run)
     denied = asyncio.run(
         coding_agent_module._hol_guard_pretool(
-            {"tool_input": {"command": "curl secret.example"}}, None, None
+            {"cwd": os.getcwd(), "tool_input": {"command": "curl secret.example"}}, None, None
         )
     )
     assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -146,7 +146,7 @@ def test_hol_guard_hook_fails_closed(monkeypatch):
     monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: None)
     missing = asyncio.run(
         coding_agent_module._hol_guard_pretool(
-            {"tool_input": {"command": "git status"}}, None, None
+            {"cwd": os.getcwd(), "tool_input": {"command": "git status"}}, None, None
         )
     )
     assert missing["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -180,10 +180,26 @@ def test_hol_guard_explicit_stop_overrides_allow(monkeypatch):
         )
         result = asyncio.run(
             coding_agent_module._hol_guard_pretool(
-                {"tool_input": {"command": "git status"}}, None, None
+                {"cwd": os.getcwd(), "tool_input": {"command": "git status"}}, None, None
             )
         )
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+
+@pytest.mark.parametrize("bad_cwd", [None, "", "./relative", 17])
+def test_hol_guard_invalid_cwd_fails_closed(monkeypatch, bad_cwd):
+    """A missing or unusable hook directory must not authorize Bash."""
+    def no_guard(*args, **kwargs):
+        raise AssertionError("Guard must not run with an invalid cwd")
+
+    monkeypatch.setattr(coding_agent_module.subprocess, "run", no_guard)
+    input_data = {"tool_input": {"command": "git status"}}
+    if bad_cwd is not None:
+        input_data["cwd"] = bad_cwd
+    decision = asyncio.run(coding_agent_module._hol_guard_pretool(input_data, None, None))
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+
 
 
 def test_hol_guard_hook_is_opt_in(monkeypatch, tmp_path):
