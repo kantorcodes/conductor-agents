@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -42,7 +43,7 @@ def test_hol_guard_command_is_one_positional_argv_after_options(monkeypatch, com
 
     decision = asyncio.run(
         coding_agent_module._hol_guard_pretool(
-            {"tool_input": {"command": command}}, None, None
+            {"cwd": os.getcwd(), "tool_input": {"command": command}}, None, None
         )
     )
 
@@ -57,3 +58,4 @@ def test_hol_guard_command_is_one_positional_argv_after_options(monkeypatch, com
     assert kwargs["text"] is True
     assert kwargs["check"] is False
     assert kwargs["timeout"] == 10
+    assert kwargs["cwd"] == os.getcwd()
