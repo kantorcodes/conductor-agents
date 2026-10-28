@@ -108,13 +108,22 @@ def test_claude_sandbox_allows_binding_a_local_test_server(monkeypatch, tmp_path
     assert network["allowedDomains"] == []
 
 
-def test_hol_guard_hook_allows_only_explicit_benign(monkeypatch):
+def test_hol_guard_hook_allows_only_explicit_native_policy(monkeypatch):
+    import json
+
     monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: "/usr/bin/hol-guard")
 
     def fake_run(*args, **kwargs):
         return SimpleNamespace(
             returncode=0,
-            stdout='{"classification":{"explicitly_benign":true},"minimum_action":"allow"}',
+            stdout=json.dumps({
+                "policy_action": "allow",
+                "reason_code": "native_policy_allow",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                },
+            }),
         )
 
     monkeypatch.setattr(coding_agent_module.subprocess, "run", fake_run)
@@ -127,50 +136,33 @@ def test_hol_guard_hook_allows_only_explicit_benign(monkeypatch):
 
 
 def test_hol_guard_hook_fails_closed(monkeypatch):
-    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: "/usr/bin/hol-guard")
-
-    def fake_run(*args, **kwargs):
-        return SimpleNamespace(
-            returncode=0,
-            stdout='{"classification":{"explicitly_benign":false},"minimum_action":"allow"}',
-        )
-
-    monkeypatch.setattr(coding_agent_module.subprocess, "run", fake_run)
-    denied = asyncio.run(
-        coding_agent_module._hol_guard_pretool(
-            {"cwd": os.getcwd(), "tool_input": {"command": "curl secret.example"}}, None, None
-        )
-    )
-    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: None)
-    missing = asyncio.run(
-        coding_agent_module._hol_guard_pretool(
-            {"cwd": os.getcwd(), "tool_input": {"command": "git status"}}, None, None
-        )
-    )
-    assert missing["hookSpecificOutput"]["permissionDecision"] == "deny"
-
-
-def test_hol_guard_explicit_stop_overrides_allow(monkeypatch):
     import json
 
     monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: "/usr/bin/hol-guard")
-    for signal in (
-        {"continue": False},
-        {"continue": "false"},
-        {"continue": 0},
-        {"decision": "deny"},
-        {"decision": "review"},
-        {"policy_action": "block"},
-        {"hookSpecificOutput": {"permissionDecision": "deny"}},
-        {"hookSpecificOutput": "malformed"},
-    ):
-        verdict = {
+
+    for verdict in (
+        {
+            "policy_action": "warn",
+            "reason_code": "native_pre_tool_unavailable",
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+            },
+        },
+        {
+            "policy_action": "review",
+            "reason_code": "native_pre_tool_review",
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+            },
+        },
+        {
             "minimum_action": "allow",
             "classification": {"explicitly_benign": True},
-            **signal,
-        }
+            "policy_evaluation": "not_run",
+        },
+    ):
         monkeypatch.setattr(
             coding_agent_module.subprocess,
             "run",
@@ -185,6 +177,57 @@ def test_hol_guard_explicit_stop_overrides_allow(monkeypatch):
         )
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: None)
+    missing = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"cwd": os.getcwd(), "tool_input": {"command": "git status"}}, None, None
+        )
+    )
+    assert missing["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_hol_guard_explicit_stop_overrides_allow(monkeypatch):
+    import json
+
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: "/usr/bin/hol-guard")
+    for stop in (
+        {"continue": False},
+        {"continue": "false"},
+        {"continue": 0},
+        {"decision": "deny"},
+        {"decision": "review"},
+        {"policy_action": "block"},
+        {"reason_code": "native_hook_worker_unavailable"},
+        {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "permissionDecision": "deny",
+        }},
+        {"hookSpecificOutput": "malformed"},
+        {"hookSpecificOutput": {
+            "hookEventName": "PostToolUse", "permissionDecision": "allow",
+        }},
+    ):
+        verdict = {
+            "policy_action": "allow",
+            "reason_code": "native_policy_allow",
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+            },
+            **stop,
+        }
+        monkeypatch.setattr(
+            coding_agent_module.subprocess,
+            "run",
+            lambda *args, **kwargs: SimpleNamespace(
+                returncode=0, stdout=json.dumps(verdict)
+            ),
+        )
+        result = asyncio.run(
+            coding_agent_module._hol_guard_pretool(
+                {"cwd": os.getcwd(), "tool_input": {"command": "git status"}}, None, None
+            )
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 @pytest.mark.parametrize("bad_cwd", [None, "", "./relative", 17])
