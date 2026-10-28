@@ -302,8 +302,12 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
     authoritative_allow = (
         isinstance(reason_code, str)
         and (
-            reason_code.startswith("native_exact_")
-            or reason_code in {"native_policy_allow", "native_custom_mcp_tool_allow"}
+            reason_code.startswith("native_exact_safe_")
+            or reason_code in {
+                "native_exact_introspection_command",
+                "native_policy_allow",
+                "native_custom_mcp_tool_allow",
+            }
         )
     )
     if (
