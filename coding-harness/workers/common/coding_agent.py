@@ -240,7 +240,7 @@ def _deny_hol_guard(reason: str) -> dict[str, Any]:
 
 
 async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
-    """Gate Bash with the installed HOL Guard CLI when the integration is enabled."""
+    """Authorize Bash at Claude's native HOL Guard PreToolUse policy boundary."""
     del tool_use_id, context
     if not isinstance(input_data, dict):
         return _deny_hol_guard("malformed hook event")
@@ -251,7 +251,7 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
     if not isinstance(command, str) or not command.strip():
         return _deny_hol_guard("missing Bash command")
 
-    # Claude's hook cwd is the actual directory for Bash, not this worker's cwd.
+    # Use the actual Bash working directory for the managed hook policy.
     cwd = input_data.get("cwd")
     if not isinstance(cwd, str) or not os.path.isabs(cwd) or not os.path.isdir(cwd):
         return _deny_hol_guard("missing or invalid Bash working directory")
@@ -260,10 +260,19 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
     if not executable:
         return _deny_hol_guard("hol-guard is not installed")
 
+    # The command travels in a private stdin envelope, never in process argv.
+    # Unlike 'command test', the managed native hook evaluates effective policy.
+    payload = json.dumps({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": tool_input,
+        "cwd": cwd,
+    })
     try:
         completed = await asyncio.to_thread(
             subprocess.run,
-            [executable, "command", "test", "--json", "--", command],
+            [executable, "hook", "--harness", "claude-code", "--json"],
+            input=payload,
             capture_output=True,
             text=True,
             timeout=10,
@@ -271,35 +280,39 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
             cwd=cwd,
         )
         if completed.returncode != 0:
-            return _deny_hol_guard("evaluation failed")
+            return _deny_hol_guard("native policy evaluation failed")
         verdict = json.loads(completed.stdout)
     except (OSError, subprocess.TimeoutExpired, ValueError, TypeError, UnicodeError):
-        return _deny_hol_guard("evaluation failed")
+        return _deny_hol_guard("native policy evaluation failed")
 
     if not isinstance(verdict, dict):
-        return _deny_hol_guard("malformed verdict")
-    classification = verdict.get("classification")
-    if not isinstance(classification, dict):
-        return _deny_hol_guard("malformed verdict")
-    # Do not let a benign classification override an explicit Guard stop.
+        return _deny_hol_guard("malformed native hook verdict")
+    hook_output = verdict.get("hookSpecificOutput")
+    if not isinstance(hook_output, dict) or hook_output.get("hookEventName") != "PreToolUse":
+        return _deny_hol_guard("missing or mismatched native hook event")
+
     decision = verdict.get("decision")
     if ("continue" in verdict and verdict["continue"] is not True) or (
         decision is not None
         and (not isinstance(decision, str) or decision.strip().lower() != "allow")
     ):
         return _deny_hol_guard("command explicitly stopped by Guard")
-    # Reject contradictory hook-level decisions before accepting classifier evidence.
-    if "policy_action" in verdict and verdict["policy_action"] != "allow":
-        return _deny_hol_guard("command explicitly stopped by Guard")
-    hook_output = verdict.get("hookSpecificOutput")
-    if hook_output is not None and (
-        not isinstance(hook_output, dict)
-        or hook_output.get("permissionDecision") != "allow"
+
+    reason_code = verdict.get("reason_code")
+    authoritative_allow = (
+        isinstance(reason_code, str)
+        and (
+            reason_code.startswith("native_exact_")
+            or reason_code in {"native_policy_allow", "native_custom_mcp_tool_allow"}
+        )
+    )
+    if (
+        verdict.get("policy_action") == "allow"
+        and hook_output.get("permissionDecision") == "allow"
+        and authoritative_allow
     ):
-        return _deny_hol_guard("command explicitly stopped by Guard")
-    if classification.get("explicitly_benign") is True and verdict.get("minimum_action") == "allow":
         return {}
-    return _deny_hol_guard("command requires review or is not explicitly benign")
+    return _deny_hol_guard("Guard requires review or did not authorize this Bash call")
 
 
 def _hol_guard() -> sdk.HookMatcher:
