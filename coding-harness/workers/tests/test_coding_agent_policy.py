@@ -152,6 +152,31 @@ def test_hol_guard_hook_fails_closed(monkeypatch):
     assert missing["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+def test_hol_guard_explicit_stop_overrides_allow(monkeypatch):
+    import json
+
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: "/usr/bin/hol-guard")
+    for signal in ({"continue": False}, {"decision": "deny"}, {"decision": "review"}):
+        verdict = {
+            "minimum_action": "allow",
+            "classification": {"explicitly_benign": True},
+            **signal,
+        }
+        monkeypatch.setattr(
+            coding_agent_module.subprocess,
+            "run",
+            lambda *args, **kwargs: SimpleNamespace(
+                returncode=0, stdout=json.dumps(verdict)
+            ),
+        )
+        result = asyncio.run(
+            coding_agent_module._hol_guard_pretool(
+                {"tool_input": {"command": "git status"}}, None, None
+            )
+        )
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 def test_hol_guard_hook_is_opt_in(monkeypatch, tmp_path):
     captured = []
 
