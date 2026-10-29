@@ -274,6 +274,22 @@ def test_hol_guard_hook_fails_closed(monkeypatch):
     assert missing["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+def test_hol_guard_executor_scheduling_failure_denies(monkeypatch):
+    """Executor shutdown must deny Bash instead of escaping the hook."""
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: "/usr/bin/hol-guard")
+
+    async def unavailable(*_args, **_kwargs):
+        raise RuntimeError("cannot schedule new futures after shutdown")
+
+    monkeypatch.setattr(coding_agent_module.asyncio, "to_thread", unavailable)
+    result = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"cwd": os.getcwd(), "tool_input": {"command": "git status"}}, None, None
+        )
+    )
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
 def test_hol_guard_explicit_stop_overrides_allow(monkeypatch):
     import json
 
