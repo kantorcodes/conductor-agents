@@ -176,6 +176,53 @@ def test_hol_guard_native_reason_must_prove_allow(monkeypatch, reason_code, expe
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        '{"policy_action":"deny","policy_action":"allow","reason_code":"native_policy_allow","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}',
+        '{"policy_action":"allow","reason_code":"native_policy_allow","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecision":"allow"}}',
+        '{"policy_action":"allow","reason_code":"native_policy_allow","continue":false,"continue":true,"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}',
+        "[" * 20000 + "]" * 20000,
+    ],
+)
+def test_hol_guard_rejects_duplicate_verdict_fields(monkeypatch, stdout):
+    """Conflicting or malformed verdicts must never approve a protected Bash call."""
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: "/usr/bin/hol-guard")
+    monkeypatch.setattr(
+        coding_agent_module.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=stdout),
+    )
+    result = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"cwd": os.getcwd(), "tool_input": {"command": "git status"}}, None, None
+        )
+    )
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_hol_guard_nonserializable_tool_input_denies_before_launch(monkeypatch):
+    """Invalid nested tool input is a denied event, not an uncaught hook failure."""
+    seen = []
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: "/usr/bin/hol-guard")
+    monkeypatch.setattr(
+        coding_agent_module.subprocess,
+        "run",
+        lambda *args, **kwargs: seen.append(args),
+    )
+    result = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"cwd": os.getcwd(), "tool_input": {
+                "command": "git status", "unexpected": object(),
+            }},
+            None,
+            None,
+        )
+    )
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert seen == []
+
+
 def test_hol_guard_hook_fails_closed(monkeypatch):
     import json
 
