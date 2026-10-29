@@ -65,3 +65,36 @@ def test_hol_guard_native_hook_receives_command_only_via_stdin(monkeypatch, comm
     assert kwargs["check"] is False
     assert kwargs["timeout"] == 10
     assert kwargs["cwd"] == os.getcwd()
+
+
+def test_hol_guard_binary_lookup_is_bound_before_bash_cwd_switch(monkeypatch, tmp_path):
+    """Do not rebind a relative PATH binary to an untrusted Bash workspace."""
+    relative_binary = "./bin/hol-guard"
+    expected_binary = os.path.realpath(relative_binary)
+    seen = {}
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: relative_binary)
+
+    def guard_runner(argv, **kwargs):
+        seen["argv"] = argv
+        seen["cwd"] = kwargs["cwd"]
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "policy_action": "allow",
+                "reason_code": "native_policy_allow",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                },
+            }),
+        )
+
+    monkeypatch.setattr(coding_agent_module.subprocess, "run", guard_runner)
+    decision = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"cwd": str(tmp_path), "tool_input": {"command": "git status"}}, None, None
+        )
+    )
+    assert decision == {}
+    assert seen["argv"][0] == expected_binary
+    assert seen["cwd"] == str(tmp_path)
