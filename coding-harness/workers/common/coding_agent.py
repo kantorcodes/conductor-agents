@@ -269,6 +269,9 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
     executable = shutil.which("hol-guard")
     if not executable:
         return _deny_hol_guard("hol-guard is not installed")
+    # A relative PATH entry (such as ./bin) must not be reinterpreted
+    # after subprocess changes into the tool's working directory.
+    executable = os.path.realpath(executable)
 
     # The command travels in a private stdin envelope, never in process argv.
     # Unlike 'command test', the managed native hook evaluates effective policy.
