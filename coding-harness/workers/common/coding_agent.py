@@ -303,6 +303,7 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
         TypeError,
         UnicodeError,
         RecursionError,
+        RuntimeError,  # asyncio.to_thread can fail to schedule after shutdown
     ):
         return _deny_hol_guard("native policy evaluation failed")
 
