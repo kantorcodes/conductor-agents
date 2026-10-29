@@ -273,12 +273,14 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
     # The command travels in a private stdin envelope, never in process argv.
     # Unlike 'command test', the managed native hook evaluates effective policy.
     try:
-        payload = json.dumps({
-        "hook_event_name": "PreToolUse",
-        "tool_name": "Bash",
-        "tool_input": tool_input,
-        "cwd": cwd,
-        })
+        payload = json.dumps(
+            {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": tool_input,
+                "cwd": cwd,
+            }
+        )
         completed = await asyncio.to_thread(
             subprocess.run,
             [executable, "hook", "--harness", "claude-code", "--json"],
@@ -291,8 +293,17 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
         )
         if completed.returncode != 0:
             return _deny_hol_guard("native policy evaluation failed")
-        verdict = json.loads(completed.stdout, object_pairs_hook=_reject_duplicate_guard_keys)
-    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError, UnicodeError, RecursionError):
+        verdict = json.loads(
+            completed.stdout, object_pairs_hook=_reject_duplicate_guard_keys
+        )
+    except (
+        OSError,
+        subprocess.TimeoutExpired,
+        ValueError,
+        TypeError,
+        UnicodeError,
+        RecursionError,
+    ):
         return _deny_hol_guard("native policy evaluation failed")
 
     if not isinstance(verdict, dict):
