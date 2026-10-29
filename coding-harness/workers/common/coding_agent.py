@@ -239,6 +239,16 @@ def _deny_hol_guard(reason: str) -> dict[str, Any]:
     }
 
 
+def _reject_duplicate_guard_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject conflicting hook verdict members before they can authorize Bash."""
+    obj: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in obj:
+            raise ValueError("duplicate key in Guard hook verdict")
+        obj[key] = value
+    return obj
+
+
 async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
     """Authorize Bash at Claude's native HOL Guard PreToolUse policy boundary."""
     del tool_use_id, context
@@ -262,13 +272,13 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
 
     # The command travels in a private stdin envelope, never in process argv.
     # Unlike 'command test', the managed native hook evaluates effective policy.
-    payload = json.dumps({
+    try:
+        payload = json.dumps({
         "hook_event_name": "PreToolUse",
         "tool_name": "Bash",
         "tool_input": tool_input,
         "cwd": cwd,
-    })
-    try:
+        })
         completed = await asyncio.to_thread(
             subprocess.run,
             [executable, "hook", "--harness", "claude-code", "--json"],
@@ -281,8 +291,8 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
         )
         if completed.returncode != 0:
             return _deny_hol_guard("native policy evaluation failed")
-        verdict = json.loads(completed.stdout)
-    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError, UnicodeError):
+        verdict = json.loads(completed.stdout, object_pairs_hook=_reject_duplicate_guard_keys)
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError, UnicodeError, RecursionError):
         return _deny_hol_guard("native policy evaluation failed")
 
     if not isinstance(verdict, dict):
