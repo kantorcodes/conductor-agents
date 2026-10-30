@@ -123,3 +123,37 @@ def test_hol_guard_rejects_guard_executable_inside_agent_worktree(monkeypatch, t
 
     assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert calls == []
+
+@pytest.mark.parametrize("git_marker", ["directory", "file"])
+@pytest.mark.parametrize("nested_git", [False, True])
+def test_guard_rejects_parent_worktree_shim(monkeypatch, tmp_path, git_marker, nested_git):
+    """A Bash cwd nested below the Git root cannot trust a parent repo shim."""
+    workspace = tmp_path / "worktree"
+    cwd = workspace / "src" / "nested"
+    shim = workspace / ".bin" / "hol-guard"
+    cwd.mkdir(parents=True)
+    shim.parent.mkdir()
+    shim.write_text("#!/bin/sh\\nexit 0\\n", encoding="utf-8")
+    if nested_git:
+        (cwd / ".git").write_text("untrusted marker", encoding="utf-8")
+    marker = workspace / ".git"
+    if git_marker == "directory":
+        marker.mkdir()
+    else:
+        marker.write_text("gitdir: /elsewhere\\n", encoding="utf-8")
+
+    calls = []
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: str(shim))
+    monkeypatch.setattr(
+        coding_agent_module.subprocess, "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    decision = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"cwd": str(cwd), "tool_input": {"command": "git status"}},
+            None, None,
+        )
+    )
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert calls == []
+
