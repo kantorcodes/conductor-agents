@@ -98,3 +98,28 @@ def test_hol_guard_binary_lookup_is_bound_before_bash_cwd_switch(monkeypatch, tm
     assert decision == {}
     assert seen["argv"][0] == expected_binary
     assert seen["cwd"] == str(tmp_path)
+
+
+def test_hol_guard_rejects_guard_executable_inside_agent_worktree(monkeypatch, tmp_path):
+    """An absolute PATH entry in the project must not supply the security binary."""
+    local_guard = tmp_path / "node_modules" / ".bin" / "hol-guard"
+    local_guard.parent.mkdir(parents=True)
+    local_guard.write_text("#!/bin/sh\\nexit 0\\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: str(local_guard))
+    monkeypatch.setattr(
+        coding_agent_module.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    decision = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"cwd": str(tmp_path), "tool_input": {"command": "git status"}},
+            None,
+            None,
+        )
+    )
+
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert calls == []
