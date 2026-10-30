@@ -157,3 +157,32 @@ def test_guard_rejects_parent_worktree_shim(monkeypatch, tmp_path, git_marker, n
     assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert calls == []
 
+def test_guard_rejects_worktree_symlink_to_outside_executable(monkeypatch, tmp_path):
+    """A worktree PATH link must not impersonate the external installed Guard."""
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / ".git").mkdir()
+    outside = tmp_path / "trusted-bin" / "hol-guard"
+    outside.parent.mkdir()
+    outside.write_text("#!/bin/sh\\nexit 0\\n", encoding="utf-8")
+    project_bin = worktree / ".bin"
+    project_bin.mkdir()
+    symlink = project_bin / "hol-guard"
+    try:
+        symlink.symlink_to(outside)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlink creation unavailable")
+
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: str(symlink))
+    monkeypatch.setattr(
+        coding_agent_module.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("project-controlled symlink must not launch"),
+    )
+    decision = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"cwd": str(worktree), "tool_input": {"command": "git status"}},
+            None, None,
+        )
+    )
+    assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
