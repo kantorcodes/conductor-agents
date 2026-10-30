@@ -68,15 +68,85 @@ def test_hol_guard_native_hook_receives_command_only_via_stdin(monkeypatch, comm
 
 
 def test_hol_guard_binary_lookup_is_bound_before_bash_cwd_switch(monkeypatch, tmp_path):
-    """Do not rebind a relative PATH binary to an untrusted Bash workspace."""
-    relative_binary = "./bin/hol-guard"
-    expected_binary = os.path.realpath(relative_binary)
-    seen = {}
-    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: relative_binary)
+    """Relative PATH shims from the worker launch checkout cannot authorize Bash."""
+    launcher = tmp_path / "launcher"
+    launcher.mkdir()
+    (launcher / ".git").mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / ".git").mkdir()
+    monkeypatch.chdir(launcher)
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: "./bin/hol-guard")
+    monkeypatch.setattr(
+        coding_agent_module.subprocess, "run",
+        lambda *_args, **_kwargs: pytest.fail("untrusted launch-checkout shim must not run"),
+    )
+    result = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"cwd": str(target), "tool_input": {"command": "git status"}}, None, None
+        )
+    )
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "untrusted worktree" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("symlinked", [False, True])
+def test_guard_rejects_worker_launcher_executable_for_other_bash_checkout(
+    monkeypatch, tmp_path, symlinked
+):
+    """An absolute PATH binary or symlink within the launcher repo is untrusted."""
+    launcher = tmp_path / "launcher"
+    launcher.mkdir()
+    (launcher / ".git").mkdir()
+    executable = launcher / ".bin" / "hol-guard"
+    executable.parent.mkdir()
+    if symlinked:
+        external = tmp_path / "external" / "hol-guard"
+        external.parent.mkdir()
+        external.write_text("test binary", encoding="utf-8")
+        try:
+            executable.symlink_to(external)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlink creation unavailable")
+    else:
+        executable.write_text("test binary", encoding="utf-8")
+    target = tmp_path / "other-checkout"
+    target.mkdir()
+    (target / ".git").mkdir()
+    monkeypatch.chdir(launcher)
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: str(executable))
+    monkeypatch.setattr(
+        coding_agent_module.subprocess, "run",
+        lambda *_args, **_kwargs: pytest.fail("launcher-owned Guard must not run"),
+    )
+    result = asyncio.run(
+        coding_agent_module._hol_guard_pretool(
+            {"cwd": str(target), "tool_input": {"command": "git status"}}, None, None
+        )
+    )
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "untrusted worktree" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_external_guard_remains_usable_with_explicit_other_bash_checkout(
+    monkeypatch, tmp_path
+):
+    """A binary outside both worktrees can still authorize genuine native policy."""
+    launcher = tmp_path / "launcher"
+    launcher.mkdir()
+    (launcher / ".git").mkdir()
+    target = tmp_path / "other-checkout"
+    target.mkdir()
+    (target / ".git").mkdir()
+    binary = tmp_path / "trusted" / "hol-guard"
+    binary.parent.mkdir()
+    binary.write_text("test binary", encoding="utf-8")
+    monkeypatch.chdir(launcher)
+    monkeypatch.setattr(coding_agent_module.shutil, "which", lambda _: str(binary))
+    seen = []
 
     def guard_runner(argv, **kwargs):
-        seen["argv"] = argv
-        seen["cwd"] = kwargs["cwd"]
+        seen.append((argv, kwargs))
         return SimpleNamespace(
             returncode=0,
             stdout=json.dumps({
@@ -90,14 +160,15 @@ def test_hol_guard_binary_lookup_is_bound_before_bash_cwd_switch(monkeypatch, tm
         )
 
     monkeypatch.setattr(coding_agent_module.subprocess, "run", guard_runner)
-    decision = asyncio.run(
+    result = asyncio.run(
         coding_agent_module._hol_guard_pretool(
-            {"cwd": str(tmp_path), "tool_input": {"command": "git status"}}, None, None
+            {"cwd": str(target), "tool_input": {"command": "git status"}}, None, None
         )
     )
-    assert decision == {}
-    assert seen["argv"][0] == expected_binary
-    assert seen["cwd"] == str(tmp_path)
+    assert result == {}
+    assert len(seen) == 1
+    assert seen[0][0][0] == str(binary)
+    assert seen[0][1]["cwd"] == str(target)
 
 
 def test_hol_guard_rejects_guard_executable_inside_agent_worktree(monkeypatch, tmp_path):
