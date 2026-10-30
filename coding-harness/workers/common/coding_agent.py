@@ -249,6 +249,22 @@ def _reject_duplicate_guard_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]
     return obj
 
 
+def _guard_worktree_root(cwd: str) -> str:
+    """Find the outermost Git workspace root without executing project tools."""
+    start = os.path.realpath(cwd)
+    current = start
+    root = start
+    while True:
+        # A nested .git file may be project-controlled. Prefer outer markers.
+        # Real Git linked worktrees can also use a .git file.
+        if os.path.lexists(os.path.join(current, ".git")):
+            root = current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return root
+        current = parent
+
+
 async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
     """Authorize Bash at Claude's native HOL Guard PreToolUse policy boundary."""
     del tool_use_id, context
@@ -274,7 +290,7 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
     executable = os.path.realpath(executable)
     # An absolute PATH entry can still resolve to a project-controlled shim.
     # Never launch Guard from within the worktree being inspected.
-    trusted_root = os.path.realpath(cwd)
+    trusted_root = _guard_worktree_root(cwd)
     try:
         if os.path.commonpath((executable, trusted_root)) == trusted_root:
             return _deny_hol_guard("Guard executable is inside the untrusted worktree")
