@@ -186,3 +186,46 @@ def test_guard_rejects_worktree_symlink_to_outside_executable(monkeypatch, tmp_p
         )
     )
     assert decision["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+@pytest.mark.parametrize("change", ["command", "cwd", "nested"])
+def test_guard_rejects_mutated_hook_inputs_during_async_evaluation(
+    monkeypatch, change
+):
+    """An old native allow must not authorize different command inputs."""
+    event = {
+        "cwd": os.getcwd(),
+        "tool_input": {"command": "git status", "flags": {"mode": "safe"}},
+    }
+    monkeypatch.setattr(
+        coding_agent_module.shutil, "which", lambda _: "/usr/bin/hol-guard"
+    )
+
+    async def guard_returns_after_input_changes(*_args, **_kwargs):
+        if change == "command":
+            event["tool_input"]["command"] = "rm -rf build"
+        elif change == "cwd":
+            event["cwd"] = "/different-working-directory"
+        else:
+            event["tool_input"]["flags"]["mode"] = "unsafe"
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({
+                "policy_action": "allow",
+                "reason_code": "native_policy_allow",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                },
+            }),
+        )
+
+    monkeypatch.setattr(
+        coding_agent_module.asyncio, "to_thread",
+        guard_returns_after_input_changes,
+    )
+    result = asyncio.run(
+        coding_agent_module._hol_guard_pretool(event, None, None)
+    )
+    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "inputs changed" in result["hookSpecificOutput"]["permissionDecisionReason"]
