@@ -287,12 +287,16 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
         return _deny_hol_guard("hol-guard is not installed")
     # A relative PATH entry (such as ./bin) must not be reinterpreted
     # after subprocess changes into the tool's working directory.
-    executable = os.path.realpath(executable)
-    # An absolute PATH entry can still resolve to a project-controlled shim.
-    # Never launch Guard from within the worktree being inspected.
+    selected_executable = os.path.abspath(executable)
+    executable = os.path.realpath(selected_executable)
+    # Reject project-owned paths even if a symlink currently resolves outside
+    # the checkout. The symlink itself may be replaced by project content.
     trusted_root = _guard_worktree_root(cwd)
     try:
-        if os.path.commonpath((executable, trusted_root)) == trusted_root:
+        if any(
+            os.path.commonpath((candidate, trusted_root)) == trusted_root
+            for candidate in (selected_executable, executable)
+        ):
             return _deny_hol_guard("Guard executable is inside the untrusted worktree")
     except ValueError:
         return _deny_hol_guard("Guard executable location could not be verified")
