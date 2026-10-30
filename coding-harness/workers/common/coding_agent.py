@@ -312,6 +312,10 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
                 "cwd": cwd,
             }
         )
+        # Capture the exact JSON tool inputs actually sent to Guard. The
+        # SDK hook is suspended while the native subprocess runs; an async
+        # caller must not substitute a different command or argument.
+        inspected_tool_input = json.loads(payload)["tool_input"]
         completed = await asyncio.to_thread(
             subprocess.run,
             [executable, "hook", "--harness", "claude-code", "--json"],
@@ -368,6 +372,14 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
         and hook_output.get("permissionDecision") == "allow"
         and authoritative_allow
     ):
+        try:
+            if (
+                input_data.get("cwd") != cwd
+                or input_data.get("tool_input") != inspected_tool_input
+            ):
+                return _deny_hol_guard("Bash inputs changed during native policy evaluation")
+        except Exception:
+            return _deny_hol_guard("Bash inputs changed during native policy evaluation")
         return {}
     return _deny_hol_guard("Guard requires review or did not authorize this Bash call")
 
