@@ -291,10 +291,15 @@ async def _hol_guard_pretool(input_data, tool_use_id, context):  # noqa: ANN001
     executable = os.path.realpath(selected_executable)
     # Reject project-owned paths even if a symlink currently resolves outside
     # the checkout. The symlink itself may be replaced by project content.
-    trusted_root = _guard_worktree_root(cwd)
+    # PATH lookup happens in the worker launch directory, which need not be
+    # Bash's effective cwd. Both checkouts are untrusted executable sources;
+    # otherwise a launch-checkout shim can forge a native policy allow even
+    # when the Bash tool executes in an unrelated repository.
+    trusted_roots = {_guard_worktree_root(os.getcwd()), _guard_worktree_root(cwd)}
     try:
         if any(
             os.path.commonpath((candidate, trusted_root)) == trusted_root
+            for trusted_root in trusted_roots
             for candidate in (selected_executable, executable)
         ):
             return _deny_hol_guard("Guard executable is inside the untrusted worktree")
